@@ -337,50 +337,93 @@ class GeMBiddingDataExtractor {
                     };
 
                     // Helper function to categorize links
-                    const categorizeLink = (url, contextText) => {
+                    const categorizeLink = (url, contextText, pageText) => {
+                        console.log('\n=== Technical Specification Link Analysis ===');
+                        console.log('URL:', url);
+                        console.log('Context:', contextText);
+                        
                         const lowerContext = contextText.toLowerCase();
                         const lowerUrl = url.toLowerCase();
+                        const lowerPageText = pageText?.toLowerCase() || '';
                         
-                        // BOQ Detail Document - check both context and URL patterns
+                        // BOQ Detail Document (KEEP UNCHANGED)
                         if (lowerContext.includes('boq detail document') || 
                             lowerContext.includes('boq document') ||
                             (lowerContext.includes('boq') && lowerContext.includes('view file')) ||
                             lowerUrl.includes('boqdocument') ||
                             lowerUrl.includes('boq_detail_document')) {
+                            console.log('✅ Categorized as: BOQ Detail Document');
                             return 'BOQ Detail Document';
                         }
                         
-                        // Buyer Specification Document - check both context and URL patterns
+                        // Buyer Specification Document (KEEP UNCHANGED)
                         if (lowerContext.includes('buyer specification document') || 
                             lowerContext.includes('buyer spec') ||
                             (lowerContext.includes('specification') && lowerContext.includes('download')) ||
                             lowerUrl.includes('buyer_specification') ||
                             lowerUrl.includes('buyerspecification') ||
                             lowerUrl.includes('spec_document')) {
+                            console.log('✅ Categorized as: Buyer Specification Document');
                             return 'Buyer Specification Document';
                         }
                         
-                        // GeM Category Specification - check both context and URL patterns
-                        if (lowerContext.includes('as per gem category specification') ||
-                            lowerContext.includes('जेम केटेगरी विशिष्टि के अनुसार') ||  // Hindi text
-                            lowerContext.includes('gem category spec') ||
-                            (lowerContext.includes('as per') && lowerContext.includes('gem')) ||
-                            (lowerContext.includes('as per') && lowerContext.includes('category')) ||
-                            lowerUrl.includes('category_specification') ||
-                            lowerUrl.includes('categoryspec') ||
-                            lowerUrl.includes('catalogattrs') ||
-                            lowerUrl.includes('catalog_support') ||
-                            (lowerUrl.includes('catalog') && lowerUrl.includes('specification'))) {
-                            console.log('Found GeM Category Specification by context/URL match');
-                            return 'GeM Category Specification';
+                        // GeM Category Specification - IMPROVED DETECTION
+                        console.log('\n=== Analyzing PDF Content ===');
+                        console.log('Page Text Sample:', pageText?.substring(0, 200) + '...');
+                        
+                        // First check for Technical Specifications section
+                        const headerPatterns = [
+                            'Technical Specifications',
+                            'Technical Specifications/तकनीकी विशिष्टियाँ',
+                            'तकनीकी विशिष्टियाँ'
+                        ];
+                        
+                        let headerFound = false;
+                        let headerIndex = -1;
+                        
+                        for (const pattern of headerPatterns) {
+                            headerIndex = pageText?.indexOf(pattern) ?? -1;
+                            if (headerIndex !== -1) {
+                                headerFound = true;
+                                console.log('Found header pattern:', pattern);
+                                break;
+                            }
                         }
                         
-                        // Additional check for GeM Category Specification link text
-                        const gemSpecText = 'As per GeM Category Specification';
-                        if (contextText.includes(gemSpecText) && contextText.indexOf(gemSpecText) < 100) {
-                            console.log('Found GeM Category Specification by exact text match');
-                            return 'GeM Category Specification';
+                        if (headerFound) {
+                            console.log('Found Technical Specifications section at index:', headerIndex);
+                            
+                            // Get text after header (up to 500 chars)
+                            const afterHeader = pageText.substring(headerIndex, headerIndex + 500);
+                            console.log('Text after header:', afterHeader);
+                            
+                            // Look for GeM Category text
+                            const gemSpecPatterns = [
+                                'As per GeM Category Specification',
+                                'जेम केटेगरी विशिष्टि के अनुसार',
+                                '*As per GeM Category Specification'  // Added asterisk version
+                            ];
+                            
+                            for (const pattern of gemSpecPatterns) {
+                                if (afterHeader.includes(pattern)) {
+                                    console.log('Found GeM Category pattern:', pattern);
+                                    
+                                    // If this URL isn't already categorized as BOQ or Buyer Spec
+                                    if (!lowerUrl.includes('boq') && 
+                                        !lowerUrl.includes('buyer') && 
+                                        !lowerUrl.includes('specification_document')) {
+                                        console.log('✅ Categorized as: GeM Category Specification');
+                                        return 'GeM Category Specification';
+                                    }
+                                }
+                            }
+                        } else {
+                            console.log('❌ Technical Specifications section not found');
                         }
+                        
+                        console.log('❌ No matching category found');
+                        console.log('=== End Analysis ===\n');
+                        return 'Other';
                         
                         // If URL contains obvious specification indicators, categorize accordingly
                         if (lowerUrl.includes('tech_spec') || 
@@ -399,39 +442,53 @@ class GeMBiddingDataExtractor {
                     const annotations = await page.getAnnotations();
                     const pageLinks = [];
                     
-                    // Process each annotation
+                    // First pass: Look for "As per GeM Category Specification" text
+                    let gemSpecAnnotation = null;
+                    for (const annot of annotations) {
+                        if (annot.subtype === 'Link') {
+                            const linkText = await getContextText(annot.rect);
+                            console.log('Checking annotation text:', linkText);
+                            
+                            if (linkText.includes('As per GeM Category Specification') ||
+                                linkText.includes('जेम केटेगरी विशिष्टि के अनुसार')) {
+                                console.log('Found GeM Category Specification text in annotation');
+                                gemSpecAnnotation = annot;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Second pass: Process all annotations
                     for (const annot of annotations) {
                         if (annot.subtype === 'Link') {
                             // Extract URL from various possible locations
                             let url = annot.url || annot.A?.URI || 
                                     (annot.action && (annot.action.URI || annot.action.Url));
                             
-                            // If this is a text link without URL, try to get URL from the text content
-                            if (!url && annot.rect) {
-                                const linkText = await getContextText(annot.rect);
-                                if (linkText.includes('As per GeM Category Specification') ||
-                                    linkText.includes('जेम केटेगरी विशिष्टि के अनुसार')) {
-                                    // Look for a URL in nearby annotations
-                                    for (const otherAnnot of annotations) {
-                                        if (otherAnnot.subtype === 'Link' && 
-                                            otherAnnot.url && 
-                                            Math.abs(otherAnnot.rect[1] - annot.rect[1]) < 50) {
-                                            url = otherAnnot.url;
-                                            console.log('Found URL near GeM Category Specification text:', url);
-                                            break;
-                                        }
+                            if (url) {
+                                console.log('Found URL in annotation:', url);
+                                
+                                // If we found GeM spec text earlier, prioritize URLs near it
+                                if (gemSpecAnnotation) {
+                                    const distance = Math.abs(annot.rect[1] - gemSpecAnnotation.rect[1]);
+                                    if (distance < 100) { // Within 100 units vertically
+                                        console.log('URL is near GeM Category Specification text');
+                                        pageLinks.push({
+                                            url: url,
+                                            type: 'GeM Category Specification',
+                                            pageNum: i
+                                        });
+                                        continue;
                                     }
                                 }
-                            }
                             
-                            if (url) {
-                                // Get surrounding text context
-                                const contextText = await getContextText(annot.rect);
+                            // Get surrounding text context
+                            const contextText = await getContextText(annot.rect);
                                 
                                 // Categorize and store the link
                                 pageLinks.push({
                                     url: url,
-                                    type: categorizeLink(url, contextText),
+                                    type: categorizeLink(url, contextText, pageTextStr),
                                     pageNum: i
                                 });
                             }
@@ -455,7 +512,7 @@ class GeMBiddingDataExtractor {
                             
                             pageLinks.push({
                                 url: url,
-                                type: categorizeLink(url, contextText),
+                                type: categorizeLink(url, contextText, regexPageText),
                                 pageNum: i
                             });
                         }
@@ -501,6 +558,8 @@ class GeMBiddingDataExtractor {
             if (!hasGemContent) {
                 console.warn('PDF may not be a GeM bidding document. Extraction may be incomplete.');
             }
+
+            // Organization Name extraction will be handled by extractOrganizationName function
 
             // DEBUG: Show what we're processing
             this.debugExtraction(fullText, file.name);
@@ -564,99 +623,116 @@ class GeMBiddingDataExtractor {
         return 'GEM/2025/B/XXXXXXX'; // Default fallback
     }
 
-    // NEW FUNCTION: calculateBIDEndDate - Calculate end date from start date + validity
-    calculateBIDEndDate(startDateStr, validityStr) {
-        try {
-            // Parse the start date (Dated field)
-            if (!startDateStr || startDateStr === 'Not Found') {
-                return 'Not Found';
-            }
-            
-            const startDateParts = startDateStr.split('-');
-            if (startDateParts.length !== 3) {
-                return 'Invalid Start Date';
-            }
-            
-            const startDate = new Date(
-                parseInt(startDateParts[2]), // Year
-                parseInt(startDateParts[1]) - 1, // Month (0-indexed)
-                parseInt(startDateParts[0]) // Day
-            );
-            
-            if (isNaN(startDate.getTime())) {
-                return 'Invalid Start Date';
-            }
-            
-            // Parse validity period
-            let validityDays = 0;
-            if (validityStr && validityStr !== 'Not Found') {
-                const match = validityStr.match(/(\d+)/);
-                if (match) {
-                    validityDays = parseInt(match[1]);
-                }
-            }
-            
-            if (validityDays <= 0) {
-                return 'Invalid Validity';
-            }
-            
-            // Calculate end date
-            const endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + validityDays);
-            
-            // Format as DD-MM-YYYY
-            const day = String(endDate.getDate()).padStart(2, '0');
-            const month = String(endDate.getMonth() + 1).padStart(2, '0');
-            const year = endDate.getFullYear();
-            
-            const endDateStr = `${day}-${month}-${year}`;
-            console.log(`Calculated BID End Date: ${startDateStr} + ${validityDays} days = ${endDateStr}`);
-            return endDateStr;
-            
-        } catch (error) {
-            console.warn('Error calculating BID End Date:', error);
-            return 'Calculation Error';
-        }
-    }
-
-    // UPDATED: extractDataFromText - Extract bid number from PDF content and add filename column
-    extractDataFromText(text, filename) {
-        // Extract BID number from PDF content (not filename)
-        const bidNumber = this.extractBIDNumber(text);
-        
-        // Extract data using the SAME regex patterns as our Python script
-        const data = {
-            'BID Number': bidNumber,
-            'Buyer': this.extractBuyer(text),
-            'BID Start Date': this.extractBIDStartDate(text),
-            'BID Offer Validity': this.extractValidity(text),
-            'BID End Date': this.calculateBIDEndDate(this.extractBIDStartDate(text), this.extractValidity(text)),
-            'State': this.extractState(text),
-            'Total Quantity': this.extractTotalQuantity(text),
-            'Item Category': this.extractItemCategory(text),
-            'Technical Specification': this.extractTechnicalSpec(text),
-            'Filename': filename // NEW: Add filename as last column
-        };
-
-        console.log('Extracted data:', data);
-        return data;
-    }
-
-    // FIXED: extractBuyer - Remove "Department Name" and clean up buyer information
-    extractBuyer(text) {
-        // Look for Ministry/State Name patterns (IMPROVED)
-        const patterns = [
+    // NEW FUNCTION: extractMinistry - Extract ministry name from PDF table structure
+    extractMinistry(text) {
+        // Look for Ministry/State Name patterns in the bid details table
+        const ministryPatterns = [
             /Ministry\s+Of\s+[A-Za-z\s&]+/i,
             /Ministry\s+[A-Za-z\s&]+/i,
             /Department\s+Of\s+[A-Za-z\s&]+/i
         ];
 
-        for (const pattern of patterns) {
+        for (const pattern of ministryPatterns) {
+            const match = text.match(pattern);
+            if (match) {
+                let ministry = match[0].trim();
+                
+                // Clean up the ministry name - remove field labels
+                ministry = ministry.replace(/\s*Ministry\/State\s+Name\s*$/i, '');
+                ministry = ministry.replace(/\s*Department\s+Name\s*$/i, '');
+                ministry = ministry.replace(/\s*Organisation\s+Name\s*$/i, '');
+                ministry = ministry.replace(/\s*Office\s+Name\s*$/i, '');
+                ministry = ministry.replace(/\s*Buyer\s+Email\s*$/i, '');
+                
+                // Remove any trailing commas or extra spaces
+                ministry = ministry.replace(/[,\s]+$/, '').trim();
+                
+                if (ministry.length > 5) {
+                    console.log('Found ministry:', ministry);
+                    return ministry;
+                }
+            }
+        }
+        
+        // Fallback: look for specific ministry patterns
+        const specificMinistries = [
+            'Ministry of Coal',
+            'Ministry of Defence', 
+            'Ministry of Petroleum and Natural Gas',
+            'Ministry of Commerce and Industry'
+        ];
+        
+        for (const ministry of specificMinistries) {
+            if (text.includes(ministry)) {
+                console.log('Found ministry from pattern:', ministry);
+                return ministry;
+            }
+        }
+        
+        console.log('No ministry found, using default');
+        return 'Ministry of Defence';
+    }
+
+    // UPDATED: extractOrganizationName - Use same approach as extractBuyer
+    extractOrganizationName(text) {
+        // Look for Organisation Name patterns in the bid details table
+        const organizationPatterns = [
+            /Organisation\s+Name[:\s]*([A-Za-z\s&]+)/i,
+            /Organization\s+Name[:\s]*([A-Za-z\s&]+)/i,
+            /संगठन\s+का\s+नाम[:\s]*([A-Za-z\s&]+)/i
+        ];
+
+        for (const pattern of organizationPatterns) {
+            const match = text.match(pattern);
+            if (match) {
+                let organization = match[1].trim();
+                
+                // Clean up the organization name
+                organization = organization.replace(/\s*Office\s+Name\s*$/i, '');
+                organization = organization.replace(/\s*Buyer\s+Email\s*$/i, '');
+                organization = organization.replace(/[,\s]+$/, '').trim();
+                
+                if (organization.length > 3) {
+                    console.log('Found organization:', organization);
+                    return organization;
+                }
+            }
+        }
+        
+        // Fallback: look for specific organization patterns
+        const specificOrganizations = [
+            'Indian Navy',
+            'Indian Army', 
+            'Indian Air Force',
+            'Goa Shipyard Limited',
+            'Hpcl Rajasthan Refinery Limited'
+        ];
+        
+        for (const org of specificOrganizations) {
+            if (text.includes(org)) {
+                console.log('Found organization from pattern:', org);
+                return org;
+            }
+        }
+        
+        console.log('No organization found, using default');
+        return '-';
+    }
+
+    // UPDATED: extractBuyer - Keep the same approach but clean up the logic
+    extractBuyer(text) {
+        // Look for Department Name patterns in the bid details table
+        const departmentPatterns = [
+            /Department\s+Of\s+[A-Za-z\s&]+/i,
+            /Department\s+[A-Za-z\s&]+/i
+        ];
+
+        for (const pattern of departmentPatterns) {
             const match = text.match(pattern);
             if (match) {
                 let buyer = match[0].trim();
                 
-                // Clean up the buyer name - remove "Department Name" and similar
+                // Clean up the buyer name - remove field labels
                 buyer = buyer.replace(/\s*Department\s+Name\s*$/i, '');
                 buyer = buyer.replace(/\s*Organisation\s+Name\s*$/i, '');
                 buyer = buyer.replace(/\s*Office\s+Name\s*$/i, '');
@@ -672,23 +748,45 @@ class GeMBiddingDataExtractor {
             }
         }
         
-        // Fallback: look for specific ministry patterns
-        const ministryPatterns = [
-            'Ministry of Coal',
-            'Ministry of Defence', 
-            'Ministry of Petroleum and Natural Gas',
-            'Ministry of Commerce and Industry'
+        // Fallback: look for specific department patterns
+        const specificDepartments = [
+            'Department of Military Affairs',
+            'Department of Defence Production',
+            'Department of Petroleum and Natural Gas'
         ];
         
-        for (const ministry of ministryPatterns) {
-            if (text.includes(ministry)) {
-                console.log('Found ministry from pattern:', ministry);
-                return ministry;
+        for (const dept of specificDepartments) {
+            if (text.includes(dept)) {
+                console.log('Found department from pattern:', dept);
+                return dept;
             }
         }
         
         console.log('No buyer found, using default');
-        return 'Ministry of Defence';
+        return 'Department of Military Affairs';
+    }
+
+    // UPDATED: extractDataFromText - Add Ministry column and use new extraction functions
+    extractDataFromText(text, filename) {
+        // Extract BID number from PDF content (not filename)
+        const bidNumber = this.extractBIDNumber(text);
+        
+        // Extract data using the SAME regex patterns as our Python script
+        const data = {
+            'BID Number': bidNumber,
+            'Ministry': this.extractMinistry(text),
+            'Buyer': this.extractBuyer(text),
+            'BID Start Date': this.extractBIDStartDate(text),
+            'BID End Date': this.extractBIDEndDate(text),
+            'Organization Name': this.extractOrganizationName(text),
+            'Total Quantity': this.extractTotalQuantity(text),
+            'Item Category': this.extractItemCategory(text),
+            'Technical Specification': this.extractTechnicalSpec(text),
+            'Filename': filename // NEW: Add filename as last column
+        };
+
+        console.log('Extracted data:', data);
+        return data;
     }
 
     // FIXED: extractBIDStartDate - Extract the "Dated" field from top right of PDF
@@ -761,101 +859,107 @@ class GeMBiddingDataExtractor {
         return '01-03-2025'; // Default fallback
     }
 
-    // SAME LOGIC AS PYTHON: extractValidity
-    extractValidity(text) {
-        // Look for validity patterns (SAME AS PYTHON)
-        const validityPatterns = [
-            /(\d+)\s*\(?Days?\)?/i,
-            /(\d+)\s*Days?/i,
-            /Validity.*?(\d+)/i
+    // NEW FUNCTION: extractBIDEndDate - Extract the "Bid End Date" field from PDF
+    extractBIDEndDate(text) {
+        // Look for the "Bid End Date" field with multiple formats
+        const endDatePatterns = [
+            /Bid\s+End\s+Date[:\s]*(\d{2}-\d{2}-\d{4})/i,
+            /बिड\s+बंद\s+होने\s+की\s+तारीख[:\s]*(\d{2}-\d{2}-\d{4})/i,
+            /Bid\s+End\s+Date\/\s*बिड\s+बंद\s+होने\s+की\s+तारीख[:\s]*(\d{2}-\d{2}-\d{4})/i,
+            /End\s+Date[:\s]*(\d{2}-\d{2}-\d{4})/i,
+            /बंद\s+होने\s+की\s+तारीख[:\s]*(\d{2}-\d{2}-\d{4})/i
         ];
         
-        for (const pattern of validityPatterns) {
+        for (const pattern of endDatePatterns) {
             const match = text.match(pattern);
             if (match) {
-                const days = match[1];
-                return `${days} (Days)`;
+                const date = match[1];
+                console.log('Found BID End Date:', date);
+                return date;
             }
         }
-        return '120 (Days)';
-    }
-
-    // IMPROVED: extractState - Better state extraction with bid opening date handling
-    extractState(text) {
-        const lines = text.split('\n');
         
-        // Look for state information in the document
+        // Look for date patterns near "Bid End Date" or "बिड बंद होने की तारीख" keywords
+        const lines = text.split('\n');
         for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            
-            // Look for bid opening date/time line which contains state code
-            if (line.includes('Bid Opening Date/Time') || line.includes('बिड खुलने की तारीख')) {
-                // Extract the state code (e.g., "03-2025" from the date string)
-                const stateMatch = line.match(/(\d{2})-\d{4}\s+\d{2}:\d{2}:\d{2}/);
-                if (stateMatch) {
-                    const stateCode = stateMatch[1];
-                    // Map state code to state name
-                    const stateMap = {
-                        '01': 'Jammu & Kashmir',
-                        '02': 'Himachal Pradesh',
-                        '03': 'Punjab',
-                        '04': 'Chandigarh',
-                        '05': 'Uttarakhand',
-                        '06': 'Haryana',
-                        '07': 'Delhi',
-                        '08': 'Rajasthan',
-                        '09': 'Uttar Pradesh',
-                        '10': 'Bihar',
-                        '11': 'Sikkim',
-                        '12': 'Arunachal Pradesh',
-                        '13': 'Nagaland',
-                        '14': 'Manipur',
-                        '15': 'Mizoram',
-                        '16': 'Tripura',
-                        '17': 'Meghalaya',
-                        '18': 'Assam',
-                        '19': 'West Bengal',
-                        '20': 'Jharkhand',
-                        '21': 'Odisha',
-                        '22': 'Chhattisgarh',
-                        '23': 'Madhya Pradesh',
-                        '24': 'Gujarat',
-                        '25': 'Daman & Diu',
-                        '26': 'Dadra & Nagar Haveli',
-                        '27': 'Maharashtra',
-                        '28': 'Andhra Pradesh',
-                        '29': 'Karnataka',
-                        '30': 'Goa',
-                        '31': 'Lakshadweep',
-                        '32': 'Kerala',
-                        '33': 'Tamil Nadu',
-                        '34': 'Puducherry',
-                        '35': 'Andaman & Nicobar Islands',
-                        '36': 'Telangana',
-                        '37': 'Ladakh'
-                    };
-                    
-                    if (stateMap[stateCode]) {
-                        console.log('Found state from code:', stateCode, stateMap[stateCode]);
-                        return stateMap[stateCode];
+            const line = lines[i];
+            if (line.includes('Bid End Date') || line.includes('बिड बंद होने की तारीख') || 
+                line.includes('End Date') || line.includes('बंद होने की तारीख')) {
+                // Look for DD-MM-YYYY pattern in this line or nearby lines
+                const dateMatch = line.match(/(\d{2}-\d{2}-\d{4})/);
+                if (dateMatch) {
+                    const date = dateMatch[1];
+                    console.log('Found BID End Date near keyword:', date);
+                    return date;
+                }
+                
+                // Check next few lines for date
+                for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+                    const nextLine = lines[j];
+                    const nextDateMatch = nextLine.match(/(\d{2}-\d{2}-\d{4})/);
+                    if (nextDateMatch) {
+                        const date = nextDateMatch[1];
+                        console.log('Found BID End Date in next line after keyword:', date);
+                        return date;
                     }
                 }
             }
-            
-            // Backup: Look for explicit state mentions
-            if (line.includes('State:') || line.includes('राज्य:')) {
-                const stateMatch = line.match(/(?:State|राज्य):\s*([^,;\n]+)/);
-                if (stateMatch && stateMatch[1].trim()) {
-                    const state = stateMatch[1].trim();
-                    console.log('Found explicit state mention:', state);
-                    return state;
-                }
-            }
         }
         
-        console.log('No state information found');
+        console.log('No BID End Date found');
         return 'Not Found';
     }
+
+    // NEW FUNCTION: calculateDaysPending - Calculate days remaining until bid expiry
+    calculateDaysPending(endDateStr) {
+        try {
+            if (!endDateStr || endDateStr === 'Not Found') {
+                return 'N/A';
+            }
+            
+            // Parse the end date (DD-MM-YYYY format)
+            const endDateParts = endDateStr.split('-');
+            if (endDateParts.length !== 3) {
+                return 'Invalid Date';
+            }
+            
+            const endDate = new Date(
+                parseInt(endDateParts[2]), // Year
+                parseInt(endDateParts[1]) - 1, // Month (0-indexed)
+                parseInt(endDateParts[0]) // Day
+            );
+            
+            if (isNaN(endDate.getTime())) {
+                return 'Invalid Date';
+            }
+            
+            // Get current date (set to start of day for accurate calculation)
+            const currentDate = new Date();
+            currentDate.setHours(0, 0, 0, 0);
+            
+            // Calculate difference in days
+            const timeDiff = endDate.getTime() - currentDate.getTime();
+            const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+            
+            if (daysDiff < 0) {
+                return 'Expired';
+            } else if (daysDiff === 0) {
+                return 'Expires Today';
+            } else {
+                return `${daysDiff} days`;
+            }
+            
+        } catch (error) {
+            console.warn('Error calculating days pending:', error);
+            return 'Calculation Error';
+        }
+    }
+
+
+
+
+    
+
 
     // IMPROVED LOGIC: extractTotalQuantity - Better quantity extraction from electrical components
     extractTotalQuantity(text) {
@@ -1160,36 +1264,20 @@ class GeMBiddingDataExtractor {
         return 'No technical specification URLs found';
     }
 
-    createSampleData(filename) {
-        // Fallback sample data
-        const bidMatch = filename.match(/GeM-Bidding-(\d+)\.pdf/);
-        const bidNumber = bidMatch ? `GEM/2025/B/${bidMatch[1]}` : 'GEM/2025/B/XXXXXXX';
-        
-        return {
-            'BID Number': bidNumber,
-            'Buyer': 'Ministry of Defence',
-            'BID Start Date': '17-02-2025',
-            'BID Offer Validity': '120 (Days)',
-            'BID End Date': '17-06-2025',
-            'State': 'Rajasthan',
-            'Total Quantity': Math.floor(Math.random() * 10000) + 100,
-            'Item Category': 'Sample Item Category - This would contain the actual extracted text from the PDF',
-            'Technical Specification': 'Specification Document; BOQ Detail Document'
-        };
-    }
 
-    // UPDATED: categorizeBids - Use calculated BID End Date for bid categorization
+
+    // UPDATED: categorizeBids - Use actual BID End Date for bid categorization
     categorizeBids(data) {
         const active = [];
         const expired = [];
         const currentDate = new Date();
+        currentDate.setHours(0, 0, 0, 0); // Set to start of day for accurate comparison
         
         data.forEach(bid => {
             try {
-                // Use calculated BID End Date for categorization
+                // Use actual BID End Date for categorization
                 const endDateStr = bid['BID End Date'];
-                if (!endDateStr || endDateStr === 'Not Found' || endDateStr === 'Invalid Start Date' || 
-                    endDateStr === 'Invalid Validity' || endDateStr === 'Calculation Error') {
+                if (!endDateStr || endDateStr === 'Not Found') {
                     // If no valid end date, consider as expired
                     expired.push(bid);
                     return;
@@ -1231,7 +1319,7 @@ class GeMBiddingDataExtractor {
             }
         });
         
-        console.log(`Bids categorized using BID End Date: ${active.length} active, ${expired.length} expired`);
+        console.log(`Bids categorized using actual BID End Date: ${active.length} active, ${expired.length} expired`);
         return { active, expired };
     }
 
@@ -1247,9 +1335,8 @@ class GeMBiddingDataExtractor {
             
             // Create main data array with headers
             const headers = [
-                'BID Number', 'Buyer', 'BID Start Date', 'BID Offer Validity', 
-                'BID End Date', 'State', 'Total Quantity', 'Item Category', 'Technical Specification',
-                'Filename'
+                'BID Number', 'Ministry', 'Department', 'BID Start Date', 'BID End Date', 'Organization Name', 'Total Quantity', 
+                'Item Category', 'Technical Specification', 'Filename'
             ];
             
             const data = [headers];
@@ -1264,11 +1351,11 @@ class GeMBiddingDataExtractor {
                 
                 data.push([
                     row['BID Number'] || 'Not Found',
+                    row['Ministry'] || 'Not Found',
                     row['Buyer'] || 'Not Found',
                     row['BID Start Date'] || 'Not Found',
-                    row['BID Offer Validity'] || 'Not Found',
                     row['BID End Date'] || 'Not Found',
-                    row['State'] || 'Not Found',
+                    row['Organization Name'] || '-',
                     row['Total Quantity'] || 'Not Found',
                     row['Item Category'] || 'Not Found',
                     techSpecCell, // Use the cell object with formula
@@ -1281,21 +1368,28 @@ class GeMBiddingDataExtractor {
             this.formatWorksheet(wsAll, 'All Bids');
             XLSX.utils.book_append_sheet(wb, wsAll, 'All Bids');
             
-            // Create 'Active Bids' worksheet
+            // Create 'Active Bids' worksheet with Days Pending column
             if (categorizedBids.active.length > 0) {
-                const activeData = [headers];
+                const activeHeaders = [...headers];
+                activeHeaders.splice(4, 0, 'Days Pending'); // Insert Days Pending after BID End Date
+                
+                const activeData = [activeHeaders];
                 categorizedBids.active.forEach(row => {
                     const techSpec = row['Technical Specification'];
                     // Just use the direct URL
                     const techSpecCell = techSpec.startsWith('http') ? techSpec : techSpec || 'Not Found';
                     
+                    // Calculate days pending for active bids
+                    const daysPending = this.calculateDaysPending(row['BID End Date']);
+                    
                     activeData.push([
                     row['BID Number'] || 'Not Found',
+                    row['Ministry'] || 'Not Found',
                     row['Buyer'] || 'Not Found',
                     row['BID Start Date'] || 'Not Found',
-                    row['BID Offer Validity'] || 'Not Found',
                     row['BID End Date'] || 'Not Found',
-                    row['State'] || 'Not Found',
+                    daysPending, // Days Pending column
+                    row['Organization Name'] || '-',
                     row['Total Quantity'] || 'Not Found',
                     row['Item Category'] || 'Not Found',
                         techSpecCell,
@@ -1318,11 +1412,11 @@ class GeMBiddingDataExtractor {
                     
                     expiredData.push([
                     row['BID Number'] || 'Not Found',
+                    row['Ministry'] || 'Not Found',
                     row['Buyer'] || 'Not Found',
                     row['BID Start Date'] || 'Not Found',
-                    row['BID Offer Validity'] || 'Not Found',
                     row['BID End Date'] || 'Not Found',
-                    row['State'] || 'Not Found',
+                    row['Organization Name'] || '-',
                     row['Total Quantity'] || 'Not Found',
                     row['Item Category'] || 'Not Found',
                         techSpecCell,
@@ -1498,7 +1592,7 @@ class GeMBiddingDataExtractor {
             `;
             
             // Show key extracted fields
-            const keyFields = ['BID Number', 'Buyer', 'State', 'Total Quantity'];
+            const keyFields = ['BID Number', 'Ministry', 'Department', 'BID End Date', 'Organization Name', 'Total Quantity'];
             keyFields.forEach(field => {
                 if (data[field] && data[field] !== 'Not Found') {
                     const value = data[field].length > 30 ? data[field].substring(0, 30) + '...' : data[field];
@@ -1541,19 +1635,22 @@ class GeMBiddingDataExtractor {
         if (data['BID Number'] === 'GEM/2025/B/XXXXXXX') {
             warnings.push('BID Number may be using default value');
         }
-        if (data['Buyer'] === 'Ministry of Defence') {
-            warnings.push('Buyer information may be using default value');
+        if (data['Ministry'] === 'Ministry of Defence') {
+            warnings.push('Ministry information may be using default value');
+        }
+        if (data['Department'] === 'Department of Military Affairs') {
+            warnings.push('Department information may be using default value');
         }
         if (data['BID Start Date'] === '01-03-2025') {
             warnings.push('BID Start Date may be using default value');
         }
-        if (data['BID End Date'] === 'Not Found' || data['BID End Date'] === 'Invalid Start Date' || 
-            data['BID End Date'] === 'Invalid Validity' || data['BID End Date'] === 'Calculation Error') {
-            warnings.push('BID End Date calculation failed');
+        if (data['BID End Date'] === 'Not Found') {
+            warnings.push('BID End Date not found in document');
             isValid = false;
         }
-        if (data['State'] === 'Rajasthan') {
-            warnings.push('State information may be using default value');
+        if (data['Organization Name'] === '-') {
+            warnings.push('Organization Name not found in document');
+            isValid = false;
         }
         if (data['Total Quantity'] === 'Not Found') {
             warnings.push('Total Quantity not found in document');
