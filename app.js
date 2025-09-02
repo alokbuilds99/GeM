@@ -367,11 +367,44 @@ class GeMBiddingDataExtractor {
                             return 'Buyer Specification Document';
                         }
                         
+                        // DEBUG: Check if URL is being incorrectly categorized
+                        if (lowerUrl.includes('gem.gov.in') && 
+                            (lowerUrl.includes('spec') || lowerUrl.includes('document') || lowerUrl.includes('pdf'))) {
+                            console.log('🔍 DEBUG: Found gem.gov.in URL - checking for misclassification');
+                            console.log('   URL:', url);
+                            console.log('   Context:', contextText);
+                        }
+                        
                         // GeM Category Specification - IMPROVED DETECTION
                         console.log('\n=== Analyzing PDF Content ===');
                         console.log('Page Text Sample:', pageText?.substring(0, 200) + '...');
                         
-                        // First check for Technical Specifications section
+                        // FIRST: Check if the context text itself contains GeM Category Specification patterns
+                        // This handles the 3rd format where the link is embedded in the GeM Category text
+                        
+                        const gemSpecContextPatterns = [
+                            'as per gem category specification',
+                            'जेम केटेगरी विशिष्टि के अनुसार',
+                            '*as per gem category specification',
+                            '* जेम केटेगरी विशिष्टि के अनुसार',
+                            'gem category specification',
+                            'जेम केटेगरी विशिष्टि'
+                        ];
+                        
+                        for (const pattern of gemSpecContextPatterns) {
+                            if (lowerContext.includes(pattern)) {
+                                console.log(`✅ Found GeM pattern in context: "${pattern}"`);
+                                
+                                // If this URL isn't already categorized as BOQ or Buyer Spec
+                                if (!lowerUrl.includes('boq') && 
+                                    !lowerUrl.includes('buyer') && 
+                                    !lowerUrl.includes('specification_document')) {
+                                    return 'GeM Category Specification';
+                                }
+                            }
+                        }
+                        
+                        // SECOND: Check for Technical Specifications section in page text
                         const headerPatterns = [
                             'Technical Specifications',
                             'Technical Specifications/तकनीकी विशिष्टियाँ',
@@ -391,41 +424,46 @@ class GeMBiddingDataExtractor {
                         }
                         
                         if (headerFound) {
-                            console.log('Found Technical Specifications section at index:', headerIndex);
+                            console.log('✅ Found Technical Specifications section');
                             
-                            // Get text after header (up to 500 chars)
-                            const afterHeader = pageText.substring(headerIndex, headerIndex + 500);
-                            console.log('Text after header:', afterHeader);
+                            // Get text after header (up to 1000 chars for better coverage)
+                            const afterHeader = pageText.substring(headerIndex, headerIndex + 1000);
                             
-                            // Look for GeM Category text
+                            // Look for GeM Category text in the section after header
                             const gemSpecPatterns = [
                                 'As per GeM Category Specification',
                                 'जेम केटेगरी विशिष्टि के अनुसार',
-                                '*As per GeM Category Specification'  // Added asterisk version
+                                '*As per GeM Category Specification',
+                                '* जेम केटेगरी विशिष्टि के अनुसार',
+                                'GeM Category Specification',
+                                'जेम केटेगरी विशिष्टि'
                             ];
                             
                             for (const pattern of gemSpecPatterns) {
                                 if (afterHeader.includes(pattern)) {
-                                    console.log('Found GeM Category pattern:', pattern);
+                                    console.log(`✅ Found GeM pattern in section: "${pattern}"`);
                                     
                                     // If this URL isn't already categorized as BOQ or Buyer Spec
                                     if (!lowerUrl.includes('boq') && 
                                         !lowerUrl.includes('buyer') && 
                                         !lowerUrl.includes('specification_document')) {
-                                        console.log('✅ Categorized as: GeM Category Specification');
                                         return 'GeM Category Specification';
                                     }
                                 }
                             }
-                        } else {
-                            console.log('❌ Technical Specifications section not found');
+                            
+                            // SPECIAL CASE: If we're in Technical Specifications section and no other patterns match,
+                            // and the URL looks like a specification document, categorize as GeM Category
+                            if (lowerUrl.includes('gem.gov.in') && 
+                                (lowerUrl.includes('spec') || lowerUrl.includes('document') || lowerUrl.includes('pdf')) &&
+                                !lowerUrl.includes('boq') && 
+                                !lowerUrl.includes('buyer')) {
+                                console.log('✅ Fallback: gem.gov.in URL in Tech Spec section');
+                                return 'GeM Category Specification';
+                            }
                         }
                         
-                        console.log('❌ No matching category found');
-                        console.log('=== End Analysis ===\n');
-                        return 'Other';
-                        
-                        // If URL contains obvious specification indicators, categorize accordingly
+                        // THIRD: Check if URL contains obvious specification indicators
                         if (lowerUrl.includes('tech_spec') || 
                             lowerUrl.includes('technical_specification') ||
                             lowerUrl.includes('specification_document')) {
@@ -435,6 +473,7 @@ class GeMBiddingDataExtractor {
                             return 'Buyer Specification Document';
                         }
                         
+                        console.log('❌ No matching category found');
                         return 'Other';
                     };
 
@@ -447,14 +486,27 @@ class GeMBiddingDataExtractor {
                     for (const annot of annotations) {
                         if (annot.subtype === 'Link') {
                             const linkText = await getContextText(annot.rect);
-                            console.log('Checking annotation text:', linkText);
                             
-                            if (linkText.includes('As per GeM Category Specification') ||
-                                linkText.includes('जेम केटेगरी विशिष्टि के अनुसार')) {
-                                console.log('Found GeM Category Specification text in annotation');
-                                gemSpecAnnotation = annot;
-                                break;
+                            // Enhanced patterns to catch the 3rd format
+                            const gemSpecTextPatterns = [
+                                'As per GeM Category Specification',
+                                'जेम केटेगरी विशिष्टि के अनुसार',
+                                '*As per GeM Category Specification',
+                                '* जेम केटेगरी विशिष्टि के अनुसार',
+                                'As per GeM Category',
+                                'जेम केटेगरी विशिष्टि',
+                                'GeM Category Specification'
+                            ];
+                            
+                            for (const pattern of gemSpecTextPatterns) {
+                                if (linkText.includes(pattern)) {
+                                    console.log('✅ Found GeM Category Specification text in annotation:', pattern);
+                                    gemSpecAnnotation = annot;
+                                    break;
+                                }
                             }
+                            
+                            if (gemSpecAnnotation) break;
                         }
                     }
 
@@ -498,23 +550,161 @@ class GeMBiddingDataExtractor {
                     // Add regex-based URL extraction as fallback
                     const regexTextContent = await page.getTextContent();
                     const regexPageText = regexTextContent.items.map(item => item.str).join(' ');
-                    const urlRegex = /(https?:\/\/[^\s)]+)/g;
-                    let match;
                     
-                    while ((match = urlRegex.exec(regexPageText)) !== null) {
-                        const url = match[1];
-                        // Check if URL was already found in annotations
-                        if (!pageLinks.some(link => link.url === url)) {
-                            // Get context around the URL
-                            const start = Math.max(0, match.index - 50);
-                            const end = Math.min(regexPageText.length, match.index + url.length + 50);
-                            const contextText = regexPageText.substring(start, end);
+                    // Enhanced URL regex patterns
+                    const urlRegexPatterns = [
+                        /(https?:\/\/[^\s)]+)/g,  // Standard HTTP/HTTPS URLs
+                        /(https?:\/\/[^\s)]*)/g,  // URLs that might be cut off
+                        /(https?:\/\/[^\s)]*\.pdf)/g,  // PDF URLs specifically
+                        /(https?:\/\/[^\s)]*\.pdf[^\s)]*)/g  // PDF URLs with additional parameters
+                    ];
+                    
+                    // Check for Technical Specifications section first - with multiple patterns
+                    const techSpecPatterns = [
+                        'Technical Specifications',
+                        'Technical Specifications/',
+                        'तकनीकी विशिष्टियाँ',
+                        'तकनीकी विशिष्टियाँ/',
+                        'Technical Specifications/तकनीकी विशिष्टियाँ'
+                    ];
+                    
+                    let techSpecIndex = -1;
+                    let foundTechSpecPattern = '';
+                    
+                    for (const pattern of techSpecPatterns) {
+                        techSpecIndex = regexPageText.indexOf(pattern);
+                        if (techSpecIndex !== -1) {
+                            foundTechSpecPattern = pattern;
+                            break;
+                        }
+                    }
+                    
+                    if (techSpecIndex !== -1) {
+                        console.log(`✅ Found "Technical Specifications" on page ${i} with pattern: "${foundTechSpecPattern}"`);
+                        
+                        // Get text after Technical Specifications
+                        const afterTechSpec = regexPageText.substring(techSpecIndex, techSpecIndex + 1000);
+                        console.log(`📄 Tech Spec section text: ${afterTechSpec.substring(0, 200)}...`);
+                        
+                        // Check for GeM Category Specification text in the section
+                        const gemPatterns = [
+                            'As per GeM Category Specification',
+                            'जेम केटेगरी विशिष्टि के अनुसार',
+                            '*As per GeM Category Specification',
+                            '* जेम केटेगरी विशिष्टि के अनुसार',
+                            'जेम केटेगरी विशिष्टि',
+                            'GeM Category Specification',
+                            'जेम केटेगरी',
+                            'GeM Category'
+                        ];
+                        
+                        let foundGemText = false;
+                        for (const pattern of gemPatterns) {
+                            if (afterTechSpec.includes(pattern)) {
+                                console.log(`✅ Found GeM text in Tech Spec section: "${pattern}"`);
+                                foundGemText = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!foundGemText) {
+                            console.log(`❌ No GeM Category Specification text found in Tech Spec section`);
+                        }
+                        
+                        // Look for URLs specifically in the Technical Specifications section
+                        for (const urlRegex of urlRegexPatterns) {
+                            let match;
+                            while ((match = urlRegex.exec(afterTechSpec)) !== null) {
+                                const url = match[1];
+                                console.log(`🔗 Found URL in Technical Specifications: ${url}`);
+                                
+                                // Get context around the URL in the section
+                                const start = Math.max(0, match.index - 100);
+                                const end = Math.min(afterTechSpec.length, match.index + url.length + 100);
+                                const contextText = afterTechSpec.substring(start, end);
+                                
+                                // Check if URL was already found
+                                if (!pageLinks.some(link => link.url === url)) {
+                                    const linkType = categorizeLink(url, contextText, afterTechSpec);
+                                    console.log(`📋 Categorized as: ${linkType}`);
+                                    
+                                    pageLinks.push({
+                                        url: url,
+                                        type: linkType,
+                                        pageNum: i
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        console.log(`❌ No Technical Specifications section found on page ${i}`);
+                        
+                        // Fallback: Check entire page for GeM Category Specification patterns
+                        const gemPatterns = [
+                            'As per GeM Category Specification',
+                            'जेम केटेगरी विशिष्टि के अनुसार',
+                            '*As per GeM Category Specification',
+                            '* जेम केटेगरी विशिष्टि के अनुसार',
+                            'जेम केटेगरी विशिष्टि',
+                            'GeM Category Specification'
+                        ];
+                        
+                        for (const pattern of gemPatterns) {
+                            if (regexPageText.includes(pattern)) {
+                                console.log(`✅ Found GeM pattern in full page text: "${pattern}"`);
+                                
+                                // Look for URLs near this pattern
+                                const patternIndex = regexPageText.indexOf(pattern);
+                                const start = Math.max(0, patternIndex - 200);
+                                const end = Math.min(regexPageText.length, patternIndex + pattern.length + 200);
+                                const contextText = regexPageText.substring(start, end);
+                                
+                                // Look for URLs in this context
+                                for (const urlRegex of urlRegexPatterns) {
+                                    let match;
+                                    while ((match = urlRegex.exec(contextText)) !== null) {
+                                        const url = match[1];
+                                        console.log(`🔗 Found URL near GeM pattern: ${url}`);
+                                        
+                                        if (!pageLinks.some(link => link.url === url)) {
+                                            const linkType = categorizeLink(url, contextText, regexPageText);
+                                            console.log(`📋 Categorized as: ${linkType}`);
+                                            
+                                            pageLinks.push({
+                                                url: url,
+                                                type: linkType,
+                                                pageNum: i
+                                            });
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Also check the entire page text for any URLs we might have missed
+                    for (const urlRegex of urlRegexPatterns) {
+                        let match;
+                        while ((match = urlRegex.exec(regexPageText)) !== null) {
+                            const url = match[1];
                             
-                            pageLinks.push({
-                                url: url,
-                                type: categorizeLink(url, contextText, regexPageText),
-                                pageNum: i
-                            });
+                            // Check if URL was already found
+                            if (!pageLinks.some(link => link.url === url)) {
+                                // Get context around the URL
+                                const start = Math.max(0, match.index - 100);
+                                const end = Math.min(regexPageText.length, match.index + url.length + 100);
+                                const contextText = regexPageText.substring(start, end);
+                                
+                                const linkType = categorizeLink(url, contextText, regexPageText);
+                                console.log(`🔗 Found URL: ${url} -> ${linkType}`);
+                                
+                                pageLinks.push({
+                                    url: url,
+                                    type: linkType,
+                                    pageNum: i
+                                });
+                            }
                         }
                     }
                     
@@ -1236,13 +1426,19 @@ class GeMBiddingDataExtractor {
 
     // Extract technical specification URL from PDF text
     extractTechnicalSpec(text) {
-        console.log('Extracting technical specification URL...');
+        console.log('\n=== EXTRACTING TECHNICAL SPECIFICATION ===');
         
         // If we have no extracted links, return early
         if (!this.pdfLinks || this.pdfLinks.length === 0) {
-            console.log('No links found in PDF');
+            console.log('❌ No links found in PDF');
             return 'No technical specification URLs found';
         }
+        
+        // Show all found links and their types
+        console.log(`📋 Found ${this.pdfLinks.length} links:`);
+        this.pdfLinks.forEach((link, index) => {
+            console.log(`  ${index + 1}. ${link.type}: ${link.url}`);
+        });
         
         // Priority order for link types
         const linkPriority = [
@@ -1255,12 +1451,12 @@ class GeMBiddingDataExtractor {
         for (const priority of linkPriority) {
             const link = this.pdfLinks.find(l => l.type === priority);
             if (link) {
-                console.log(`Found ${priority} URL:`, link.url);
+                console.log(`✅ Selected: ${priority}`);
                 return link.url;
             }
         }
         
-        console.log('No technical specification URLs found');
+        console.log('❌ No technical specification URLs found');
         return 'No technical specification URLs found';
     }
 
@@ -1733,6 +1929,143 @@ if (window.app) {
         }
         
         this.showStatus('Debug info logged to console. Press F12 to view.', 'success');
+    };
+
+    // NEW FUNCTION: Test technical specification categorization
+    window.app.testTechSpecCategorization = function() {
+        console.log('=== TESTING TECHNICAL SPECIFICATION CATEGORIZATION ===');
+        
+        // Test cases for different formats
+        const testCases = [
+            {
+                name: 'Format 1: BOQ Detail Document',
+                url: 'https://example.com/boq_document.pdf',
+                context: 'BOQ Detail Document View File',
+                expected: 'BOQ Detail Document'
+            },
+            {
+                name: 'Format 2: Buyer Specification Document',
+                url: 'https://example.com/buyer_spec.pdf',
+                context: 'Buyer Specification Document Download',
+                expected: 'Buyer Specification Document'
+            },
+            {
+                name: 'Format 3: GeM Category Specification (embedded)',
+                url: 'https://example.com/gem_spec.pdf',
+                context: '* जेम केटेगरी विशिष्टि के अनुसार / As per GeM Category Specification',
+                expected: 'GeM Category Specification'
+            },
+            {
+                name: 'Format 3: GeM Category Specification (with asterisk)',
+                url: 'https://example.com/gem_spec2.pdf',
+                context: '*As per GeM Category Specification',
+                expected: 'GeM Category Specification'
+            },
+            {
+                name: 'Format 3: GeM Category Specification (Hindi)',
+                url: 'https://example.com/gem_spec3.pdf',
+                context: 'जेम केटेगरी विशिष्टि के अनुसार',
+                expected: 'GeM Category Specification'
+            },
+            {
+                name: 'Format 3: GeM Category Specification (gem.gov.in fallback)',
+                url: 'https://mkp.gem.gov.in/uploaded_documents/51/16/877/OrderItem/BoqDocument/2025/2/6/22mac0095_tech_spec_2025-02-06-15-49-20_5b7fe797136abb9a018fc0236beb61f6.pdf',
+                context: 'Technical Specifications As per GeM Category Specification',
+                expected: 'GeM Category Specification'
+            }
+        ];
+        
+        testCases.forEach(testCase => {
+            console.log(`\n--- Testing: ${testCase.name} ---`);
+            console.log('URL:', testCase.url);
+            console.log('Context:', testCase.context);
+            console.log('Expected:', testCase.expected);
+            
+            // Simulate the categorization logic
+            const lowerContext = testCase.context.toLowerCase();
+            const lowerUrl = testCase.url.toLowerCase();
+            const pageText = testCase.context; // Simplified for testing
+            
+            let result = 'Other';
+            
+            // BOQ check
+            if (lowerContext.includes('boq detail document') || 
+                lowerContext.includes('boq document') ||
+                (lowerContext.includes('boq') && lowerContext.includes('view file')) ||
+                lowerUrl.includes('boqdocument') ||
+                lowerUrl.includes('boq_detail_document')) {
+                result = 'BOQ Detail Document';
+            }
+            // Buyer Spec check
+            else if (lowerContext.includes('buyer specification document') || 
+                lowerContext.includes('buyer spec') ||
+                (lowerContext.includes('specification') && lowerContext.includes('download')) ||
+                lowerUrl.includes('buyer_specification') ||
+                lowerUrl.includes('buyerspecification') ||
+                lowerUrl.includes('spec_document')) {
+                result = 'Buyer Specification Document';
+            }
+            // GeM Category check - context first
+            else {
+                const gemSpecContextPatterns = [
+                    'as per gem category specification',
+                    'जेम केटेगरी विशिष्टि के अनुसार',
+                    '*as per gem category specification',
+                    '* जेम केटेगरी विशिष्टि के अनुसार',
+                    'gem category specification',
+                    'जेम केटेगरी विशिष्टि'
+                ];
+                
+                for (const pattern of gemSpecContextPatterns) {
+                    if (lowerContext.includes(pattern)) {
+                        if (!lowerUrl.includes('boq') && 
+                            !lowerUrl.includes('buyer') && 
+                            !lowerUrl.includes('specification_document')) {
+                            result = 'GeM Category Specification';
+                            break;
+                        }
+                    }
+                }
+                
+                // If no context match, check for Technical Specifications section
+                if (result === 'Other' && pageText.includes('Technical Specifications')) {
+                    const gemSpecPatterns = [
+                        'As per GeM Category Specification',
+                        'जेम केटेगरी विशिष्टि के अनुसार',
+                        '*As per GeM Category Specification',
+                        '* जेम केटेगरी विशिष्टि के अनुसार',
+                        'GeM Category Specification',
+                        'जेम केटेगरी विशिष्टि'
+                    ];
+                    
+                    for (const pattern of gemSpecPatterns) {
+                        if (pageText.includes(pattern)) {
+                            if (!lowerUrl.includes('boq') && 
+                                !lowerUrl.includes('buyer') && 
+                                !lowerUrl.includes('specification_document')) {
+                                result = 'GeM Category Specification';
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Fallback for gem.gov.in URLs in Technical Specifications
+                    if (result === 'Other' && 
+                        lowerUrl.includes('gem.gov.in') && 
+                        (lowerUrl.includes('spec') || lowerUrl.includes('document') || lowerUrl.includes('pdf')) &&
+                        !lowerUrl.includes('boq') && 
+                        !lowerUrl.includes('buyer')) {
+                        result = 'GeM Category Specification';
+                    }
+                }
+            }
+            
+            const passed = result === testCase.expected;
+            console.log(`Result: ${result} ${passed ? '✅ PASS' : '❌ FAIL'}`);
+        });
+        
+        console.log('\n=== END CATEGORIZATION TEST ===');
+        this.showStatus('Categorization test completed. Check console for results.', 'success');
     };
 } else {
     console.error('❌ Cannot add debug functions - app not available');
